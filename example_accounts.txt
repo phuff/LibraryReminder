@@ -1,0 +1,3 @@
+http://hostname-of-library.org/ipac20/ipac.jsp?profile=dial&menu=account,<library-card-number1>,<library-pin1>,<google-calendar-account1>,<google-calendar-password1>
+http://hostname-of-library.org/ipac20/ipac.jsp?profile=dial&menu=account,<library-card-number2>,<library-pin2>,<google-calendar-account2>,<google-calendar-password2>
+http://hostname-of-library.org/ipac20/ipac.jsp?profile=dial&menu=account,<library-card-number3>,<library-pin3>,<google-calendar-account3>,<google-calendar-password3>
