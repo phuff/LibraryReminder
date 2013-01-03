@@ -102,7 +102,7 @@ class GoogleCalendarInterface:
             if event.content.text.find(line) < 0:
                 dirty = True
                 content = event.content.text
-                content += "\n" + line + "\n"
+                content += line + "\n"
                 event.content = atom.data.Content(text=content)
         if dirty:
             self.client.Update(event)
@@ -122,18 +122,29 @@ class GoogleCalendarInterface:
       feed = self.getFeedForDate(dueDate)
       for event in feed.entry:
         if event.title.text == self.booksDueTitle:
+          print "Found the old event text: %s" % (event.content.text, )
           line = self.getCalendarTextForBook(book)
+          # Ghetto way of handling both the middle and the end.  I didn't want to fiddle with regex escaping for the calendartext
+          # of a book, since it could techincally be a bunch of things that I don't have a spec for so I'm not sure what or if I need to escape
+          # #lazyProgrammer :)
           newContent = event.content.text.replace(line + "\n", "")
+          newContent = event.content.text.replace(line, "")
+          newContent = newContent.strip()
+          print "newContent afterwards: %s" % (newContent, )
           if newContent.strip() == '':
+            print "newContent stripped is empty, so I'm deleting the event."
             self.client.Delete(event)
           elif newContent != event.content.text:
+            print "newContent text is not equivalent to the old one, so I'm updating it."
             event.content = atom.data.Content(text=newContent)
             self.client.Update(event)
 
     def removeOldBooks(self, oldBooks, currentBooks):
       for dueDate in oldBooks:
         for book in oldBooks[dueDate]:
+          print "checking book: %s" % (book, )
           if not self.bookIsDue(book, dueDate, currentBooks):
+            print "%s is not due any more on %s" % (book, dueDate, )
             self.removeBookFromFeed(book, dueDate)
 
 if __name__ == '__main__':
