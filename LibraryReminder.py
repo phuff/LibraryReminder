@@ -1,9 +1,10 @@
 #!/usr/bin/python
-
+import mechanize
 from mechanize import Browser
 from BeautifulSoup import BeautifulSoup
 from elementtree import ElementTree
 import json
+from datetime import datetime
 
 try:
   from xml.etree import ElementTree
@@ -41,11 +42,84 @@ class HorizonInterface:
             tds = trs[i].fetch('td', recursive=False)
             title = tds[1].find('a', {'class': 'mediumBoldAnchor'}).contents[0]
             author = tds[1].find('a', {'class': 'normalBlackFont1'}).contents[0]
-            barcode = tds[2].find('a').contents[0]
-            dueDate = tds[4].find('a').contents[0]
+            dueDate = tds[3].find('a').contents[0]
             if not dueDate in books:
                 books[dueDate] = []
-            books[dueDate].append([title,author,dueDate,barcode])
+            books[dueDate].append({'title': title,'author': author,'dueDate': dueDate})
+        return books
+
+
+class HorizonInterface:
+    def __init__(self, username, password, site):
+        self.username = username
+        self.password = password
+        self.site = site
+        self.browser = Browser()
+        self.browser.open(self.site)
+        self.browser.select_form(name="security")
+        self.browser["sec1"] = self.username
+        self.browser["sec2"] = self.password
+        self.browser.submit()
+
+
+    def getCheckedOutBooks(self):
+        response = self.browser.follow_link(text_regex=r"^Items Out$")
+        bs = BeautifulSoup(response.read())
+        tables = bs.findAll('table', {'class': 'tableBackgroundHighlight'})
+        books = {}
+        if(len(tables) <= 1):
+            return books
+
+        trs = tables[1].fetch('tr', recursive=False)
+        for i in xrange(1, len(trs)):
+            tds = trs[i].fetch('td', recursive=False)
+            title = tds[1].find('a', {'class': 'mediumBoldAnchor'}).contents[0]
+            author = tds[1].find('a', {'class': 'normalBlackFont1'}).contents[0]
+            dueDate = tds[3].find('a').contents[0]
+            if not dueDate in books:
+                books[dueDate] = []
+            books[dueDate].append({'title': title,'author': author,'dueDate': dueDate})
+        return books
+
+class PolarisInterface:
+    def __init__(self, username, password, site):
+        self.username = username
+        self.password = password
+        self.site = site
+        self.browser = Browser(factory=mechanize.DefaultFactory(i_want_broken_xhtml_support=True))
+        self.browser.open(self.site)
+        self.browser.select_form(name="formMain")
+        self.browser["textboxBarcodeUsername"] = self.username
+        self.browser["textboxPassword"] = self.password
+        self.browser.submit()
+
+
+    def getCheckedOutBooks(self):
+        response = self.browser.follow_link(text_regex=r"^Items Out.*$")
+        bs = BeautifulSoup(response.read())
+        tables = bs.findAll('table', {'class': 'patrongrid'})
+        books = {}
+        if(len(tables) < 1):
+            return books
+
+        trs = tables[0].fetch('tr', recursive=False)
+        for i in xrange(1, len(trs)):
+            if not trs[i].has_key('class'):
+                continue
+            tds = trs[i].fetch('td', recursive=False)
+            title = tds[4].find('a',).contents[0]
+            dueDate = tds[6].find('span').contents[0]
+            dueDate = datetime.strptime(dueDate, "%m/%d/%Y").strftime("%m/%d/%Y")
+            infoLink = tds[1].find('a')['href']
+            response2 = self.browser.open(infoLink)
+            bs2 = BeautifulSoup(response2.read())
+            ajaxTrs = bs2.findAll('tr')
+            authorTds = ajaxTrs[1].findAll('td', recursive=False)
+            author = authorTds[2].text
+            author = "by %s" % (author, )
+            if not dueDate in books:
+                books[dueDate] = []
+            books[dueDate].append({'title': title,'author': author,'dueDate': dueDate})
         return books
 
 class GoogleCalendarInterface:
@@ -84,7 +158,7 @@ class GoogleCalendarInterface:
         event.title = atom.data.Title(text=self.booksDueTitle)
         content = ""
         for book in booksForDate:
-            content += "%s %s %s\n" % (book[0], book[1], book[3], )
+            content += "%s\n" % (self.getCalendarTextForBook(book), )
 
         event.content = atom.data.Content(text=content)
         when = gdata.calendar.data.When(start=date, end=date)
@@ -93,7 +167,7 @@ class GoogleCalendarInterface:
         new_event = self.client.InsertEvent(event)
 
     def getCalendarTextForBook(self, book):
-      return "%s %s %s" % (book[0], book[1], book[3], )
+      return "%s %s" % (book['title'], book['author'])
 
     def ensureEventIsAccurate(self, event, booksForDate):
         dirty = False
@@ -122,29 +196,26 @@ class GoogleCalendarInterface:
       feed = self.getFeedForDate(dueDate)
       for event in feed.entry:
         if event.title.text == self.booksDueTitle:
-          print "Found the old event text: %s" % (event.content.text, )
           line = self.getCalendarTextForBook(book)
-          # Ghetto way of handling both the middle and the end.  I didn't want to fiddle with regex escaping for the calendartext
-          # of a book, since it could techincally be a bunch of things that I don't have a spec for so I'm not sure what or if I need to escape
-          # #lazyProgrammer :)
+          # Ghetto way of handling both a book in the middle of the
+          # blob and the end of the blob by replacing both cases with
+          # empty string.  I didn't want to fiddle with regex escaping
+          # for the calendartext of a book, since it could techincally
+          # be a bunch of things that I don't have a spec for so I'm
+          # not sure what or if I need to escape #lazyProgrammer :)
           newContent = event.content.text.replace(line + "\n", "")
           newContent = event.content.text.replace(line, "")
           newContent = newContent.strip()
-          print "newContent afterwards: %s" % (newContent, )
           if newContent.strip() == '':
-            print "newContent stripped is empty, so I'm deleting the event."
             self.client.Delete(event)
           elif newContent != event.content.text:
-            print "newContent text is not equivalent to the old one, so I'm updating it."
             event.content = atom.data.Content(text=newContent)
             self.client.Update(event)
 
     def removeOldBooks(self, oldBooks, currentBooks):
       for dueDate in oldBooks:
         for book in oldBooks[dueDate]:
-          print "checking book: %s" % (book, )
           if not self.bookIsDue(book, dueDate, currentBooks):
-            print "%s is not due any more on %s" % (book, dueDate, )
             self.removeBookFromFeed(book, dueDate)
 
 if __name__ == '__main__':
@@ -164,8 +235,8 @@ if __name__ == '__main__':
 
   for line in library_accounts:
     (library_site, library_account, library_pin, gcal_account, gcal_password) = line.split(',')
-    horizon = HorizonInterface(library_account, library_pin, library_site)
-    books = horizon.getCheckedOutBooks()
+    agent = PolarisInterface(library_account, library_pin, library_site)
+    books = agent.getCheckedOutBooks()
     gcalInterface = GoogleCalendarInterface(gcal_account, gcal_password)
     gcalInterface.ensureAppropriateEventsExistForBooks(books)
     merge_dictionaries(allBooks, books)
