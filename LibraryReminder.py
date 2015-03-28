@@ -4,7 +4,8 @@ from mechanize import Browser
 from BeautifulSoup import BeautifulSoup
 from elementtree import ElementTree
 import json
-from datetime import datetime
+from datetime import datetime, date
+from EmailSender import EmailSender
 
 try:
   from xml.etree import ElementTree
@@ -87,6 +88,7 @@ class PolarisInterface:
         self.password = password
         self.site = site
         self.browser = Browser(factory=mechanize.DefaultFactory(i_want_broken_xhtml_support=True))
+        self.browser.addheaders = [('User-Agent', 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/41.0.2272.101 Safari/537.36')]
         self.browser.open(self.site)
         self.browser.select_form(name="formMain")
         self.browser["textboxBarcodeUsername"] = self.username
@@ -125,6 +127,7 @@ class PolarisInterface:
 class GoogleCalendarInterface:
     def __init__(self, username, password):
         self.client = gdata.calendar.client.CalendarClient(source='org.phuff-HorizonGCalInterface-v1')
+        print "About to try and log in %s %s" % (username, password)
         self.client.ClientLogin(username, password, self.client.source)
         self.booksDueTitle = 'Library Books Due'
 
@@ -162,7 +165,7 @@ class GoogleCalendarInterface:
 
         event.content = atom.data.Content(text=content)
         when = gdata.calendar.data.When(start=date, end=date)
-        when.reminder.append(gdata.data.Reminder(days='1'))
+        when.reminder.append(gdata.data.Reminder(hours='6'))
         event.when.append(when)
         new_event = self.client.InsertEvent(event)
 
@@ -218,6 +221,47 @@ class GoogleCalendarInterface:
           if not self.bookIsDue(book, dueDate, currentBooks):
             self.removeBookFromFeed(book, dueDate)
 
+
+class EmailInterface:
+    def emailAboutBooksIfNecessary(self, toAccount, fromAccount, books):
+      overdueBooks = []
+      dueTodayBooks = []
+      for dueDate in books:
+        if datetime.strptime(dueDate, "%m/%d/%Y").date() < date.today():
+          for book in books[dueDate]:
+            overdueBooks.append({'dueDate': dueDate, 'book': book})
+        if datetime.strptime(dueDate, "%m/%d/%Y").date() == date.today():
+          for book in books[dueDate]:
+            dueTodayBooks.append(book)
+      if len(overdueBooks) > 0 or len(dueTodayBooks) > 0:
+        es = EmailSender()
+        dueTodayString = ""
+        overdueString = ""
+        if len(dueTodayBooks) > 0:
+          dueTodayString = "%d book%s due today" % (len(dueTodayBooks), "s" if len(dueTodayBooks) > 0 else "")
+        if len(overdueBooks) > 0:
+          overdueString = "%d book%s overdue" % (len(overdueBooks), "s" if len(overdueBooks) > 0 else "")
+        summaryString = ""
+        subjectString = ""
+        if len(dueTodayBooks) > 0 and len(overdueBooks) > 0:
+          summaryString = "%s and %s" % (dueTodayString, overdueString)
+        else:
+          summaryString = "%s%s" % (dueTodayString, overdueString)
+        subject = message = "There %s %s at the library!" % ("is" if len(dueTodayBooks) + len(overdueBooks) == 1 else "are", summaryString, )
+        message += "\n"
+        if len(dueTodayBooks) > 0:
+          booksDueTodayString = "Due today:\n"
+          for book in dueTodayBooks:
+            booksDueTodayString += "%s %s\n" % (book["title"], book["author"])
+          message += booksDueTodayString
+        if len(overdueBooks) > 0:
+          overdueBooksString = "Overdue:\n"
+          for bookStruct in overdueBooks:
+            overdueBooksString += "%s %s - Due: %s\n" % (bookStruct["book"]["title"], bookStruct["book"]["author"], bookStruct["dueDate"])
+          message += overdueBooksString
+
+        es.sendEmail(toAccount, fromAccount, subject, message)
+
 if __name__ == '__main__':
 
   def merge_dictionaries(dict1, dict2):
@@ -232,13 +276,14 @@ if __name__ == '__main__':
   library_accounts = open("library_accounts.txt")
 
   allBooks = {}
-
+  email = ""
   for line in library_accounts:
     (library_site, library_account, library_pin, gcal_account, gcal_password) = line.split(',')
+    email = gcal_account
     agent = PolarisInterface(library_account, library_pin, library_site)
     books = agent.getCheckedOutBooks()
-    gcalInterface = GoogleCalendarInterface(gcal_account, gcal_password)
-    gcalInterface.ensureAppropriateEventsExistForBooks(books)
+    #gcalInterface = GoogleCalendarInterface(gcal_account, gcal_password)
+    #gcalInterface.ensureAppropriateEventsExistForBooks(books)
     merge_dictionaries(allBooks, books)
 
   try:
@@ -247,6 +292,10 @@ if __name__ == '__main__':
   except IOError as e:
     oldBooks = {}
 
-  gcalInterface.removeOldBooks(oldBooks, allBooks)
+  #gcalInterface.removeOldBooks(oldBooks, allBooks)
   with open("library_books.json", "w") as f:
     f.write(json.dumps(allBooks))
+
+  if datetime.now().hour == 9 or datetime.now().hour == 14:
+    ei = EmailInterface()
+    ei.emailAboutBooksIfNecessary(email, email, allBooks)
